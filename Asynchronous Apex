@@ -1,0 +1,185 @@
+Asynchronous Apex
+
+1.Use Future Methods
+
+AccountProcessor Class
+public class AccountProcessor {
+    @future
+    public static void countContacts(List<Id> accountIds) {
+        List<Account> accountsToUpdate = new List<Account>();
+        List<Account> accounts = [Select Id, Name, (Select Id from Contacts) from Account Where Id IN :accountIds];
+        For(Account acc:accounts){
+            List<Contact> contactList = acc.Contacts;
+            acc.Number_Of_Contacts__c = contactList.size();
+            accountsToUpdate.add(acc);
+            
+        }
+        update accountsToUpdate;
+    }
+}
+AccountProcessorTest Class
+@IsTest
+private class AccountProcessorTest {
+    @IsTest
+    private static void testCountContacts() {
+        Account newAccount = new Account(Name ='Test Account');
+        insert newAccount;
+        
+        Contact newContact1 = new Contact(FirstName='John',
+                                          LastName='Doe',
+                                          AccountId=newAccount.Id);
+        insert newContact1;
+        
+        Contact newContact2 = new Contact(FirstName='Jane',
+                                          LastName='Doe',
+                                          AccountId=newAccount.Id);   
+        insert newContact2;
+        
+        List<Id> accountIds = new List<Id>();
+        accountIds.add(newAccount.Id);
+        
+        
+        
+        Test.startTest();   
+        AccountProcessor.countContacts(accountIds);
+        Test.stopTest();
+        
+    }
+}
+
+
+2.Use Batch Apex
+
+LeadProcessor Class
+public without sharing class LeadProcessor implements Database.Batchable<sobject>, Database.Stateful {
+    
+    public Integer recordCount =0;
+    
+    public Database.QueryLocator start(Database.BatchableContext dbc) {
+        return Database.getQueryLocator([SELECT Id, Name FROM Lead]);
+    }
+    
+    public void execute(database.BatchableContext dbc, List<Lead> leads) {
+        for(Lead l : leads) {
+            l.LeadSource = 'Dreamforce';
+        }
+        update leads;
+        recordCount = recordCount + leads.size();
+    }
+    
+    public void finish (Database.BatchableContext dbc) {
+        System.debug('Total records processed' + recordCount);
+    }
+    
+}
+ 
+LeadProcessorTest Class
+@IsTest
+private class LeadProcessorTest {
+    
+    @isTest
+    private static void testBatchClass() {
+        
+        //Load test Data
+        List<Lead> leads = new List<Lead>();
+        for (Integer i =0; i<200; i++) {
+            leads.add(new Lead(LastName='Connock', Company = 'Salesforce'));
+        }
+        insert leads;
+        
+        //Perform the Test
+        Test.startTest();
+        LeadProcessor lp = new LeadProcessor();
+        Id batchId = Database.executeBatch(lp,200);
+        Test.stopTest();
+        
+        //Check the Result
+        List<Lead> updatedLeads = [SELECT Id FROM Lead WHERE Leadsource = 'Dreamforce'];
+        System.assertEquals(200, updatedLeads.size(), 'ERROR: At Least 1 lead record not updated correctly');
+    }
+}
+
+
+3.Control Processes with Queueable Apex
+
+AddPrimaryContact Class
+public class AddPrimaryContact implements Queueable{
+    private Contact c;
+    private String state;
+    public AddPrimaryContact(Contact c,String state){
+        this.c =c;
+        this.state = state;
+    }
+    public void execute(QueueableContext context){
+        List<Account> ListAccount = [SELECT Id, Name, (SELECT Id, FirstName, LastName FROM Contacts) FROM Account WHERE BillingState =:
+                                  state LIMIT 200];
+        List<Contact> lstContact = new List<Contact>();
+        for (Account acc:ListAccount){
+            Contact cont = c.clone(false, false, false, false);
+            cont.Accountid = acc.id;
+            lstContact.add(cont);
+        }
+        if(lstcontact.size()>0){
+            insert lstcontact;
+        }     
+    }
+}
+AddPrimaryContactTest  Class
+@isTest
+public class AddPrimaryContactTest {
+    @isTest static void TestList(){
+        List<Account> Teste = new List<Account>();
+        for(Integer i=0;i<50;i++){
+            teste.add(new Account(BillingState ='CA', name = 'Test' +i));
+        }
+        for(Integer j=0;j<50;j++){
+            Teste.add(new Account(BillingState ='NY', name= 'Test'+ j));
+        }
+        insert Teste;
+        
+        Contact co = new Contact();
+        co.FirstName ='demo';
+        co.LastName ='demo';
+        insert co;
+        String state = 'CA';
+        
+        AddPrimaryContact apc = new AddPrimaryContact(co, state);
+        Test.startTest();
+        System.enqueueJob(apc);
+        Test.stopTest();
+    }
+}
+
+
+4. Schedule Jobs Using the Apex Scheduler
+
+DailyLeadProcessor Class
+public class DailyLeadProcessor implements Schedulable{
+    Public void execute(SchedulableContext SC){
+        List<Lead> LeadObj= [SELECT Id from Lead where LeadSource=null limit 200];
+        for(Lead l:LeadObj){
+            l.LeadSource='Dreamforce';
+            update l;
+        }
+    }
+
+}
+ 
+ 
+DailyLeadProcessorTest Class
+@isTest
+public class DailyLeadProcessorTest {
+    static testMethod void testDailyLeadProcessor(){
+        String CRON_EXP ='0 0 1 * * ?';
+        List<Lead> lList = new List<Lead>();
+        for (Integer i=0;i<200;i++){
+            lList.add(new Lead(LastName = 'Dreamforce'+i, Company ='Test1 Inc.', status='Open - Not Connected'));
+            
+        }
+        insert lList;
+        
+        Test.startTest();
+        string jobId = System.schedule('DailyLeadProcessor', CRON_EXP, new DailyLeadProcessor());
+    }
+
+}
